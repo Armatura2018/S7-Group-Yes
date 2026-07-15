@@ -4,6 +4,7 @@ import asyncio
 import logging
 import aiohttp
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.default import DefaultBotProperties  # <-- ДОБАВЬ ЭТУ СТРОКУ
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import CommandStart
 from aiogram.enums import ParseMode
@@ -125,7 +126,7 @@ async def accept_join_request(group_id: int, roblox_user_id: int):
 
 
 # 3. Настройка Telegram-бота
-bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
 @dp.message(CommandStart())
