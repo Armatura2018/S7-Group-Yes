@@ -17,14 +17,15 @@ load_dotenv()
 
 # ==================== НАСТРОЙКИ ====================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CREATOR_ID = int(os.getenv("CREATOR_ID", 0))
+ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 GROUP_ID = int(os.getenv("GROUP_ID", 0))
 ROBLOX_COOKIE = os.getenv("ROBLOX_COOKIE")
 
+# Добавь эту строчку, чтобы CREATOR_ID существовал глобально с самого старта
+CREATOR_ID = int(os.getenv("CREATOR_ID", 0)) 
+
 BLACKLIST_GROUPS_RAW = os.getenv("BLACKLIST_GROUPS", "")
 BLACKLIST_GROUPS = [int(g.strip()) for g in BLACKLIST_GROUPS_RAW.split(",") if g.strip().isdigit()]
-
-# Путь к базе данных (по умолчанию data/bot_database.db)
 DB_PATH = os.getenv("DATABASE_PATH", "data/bot_database.db")
 # ===================================================
 
