@@ -268,7 +268,7 @@ async def process_check_join(callback: CallbackQuery):
             ])
             await callback.message.edit_text(
                 f"❌ Ошибка Roblox: {message_text}\n\n"
-                f"Ты точно нажал(а) кнопку 'Join Group' в самой игре? Попробуй отправить заявку и нажми проверить снова.",
+                f"Ты точно нажал(а) кнопку 'Join Group'? Попробуй отправить заявку и нажми проверить снова.",
                 reply_markup=markup
             )
 
