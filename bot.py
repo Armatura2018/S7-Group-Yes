@@ -57,7 +57,16 @@ async def init_db():
         await db.commit()
     print(f"База данных инициализирована по пути: {DB_PATH}")
 
-async def register_user(tg_id, username, roblox_id):
+# ==================== БЛОК БАЗЫ ДАННЫХ ====================
+
+async def get_user(tg_id: int):
+    """Получает данные пользователя по его Telegram ID"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT roblox_username, roblox_user_id, status FROM users WHERE tg_id = ?", (tg_id,)) as cursor:
+            return await cursor.fetchone()
+
+async def register_user(tg_id: int, username: str, roblox_id: int):
+    """Регистрирует новый запрос в базе"""
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("INSERT INTO users (tg_id, roblox_username, roblox_user_id) VALUES (?, ?, ?)", (tg_id, username, roblox_id))
@@ -66,12 +75,14 @@ async def register_user(tg_id, username, roblox_id):
     except aiosqlite.IntegrityError:
         return False
 
-async def update_status(tg_id, status):
+async def update_status(tg_id: int, status: str):
+    """Обновляет статус заявки (approved/rejected)"""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE users SET status = ? WHERE tg_id = ?", (status, tg_id))
         await db.commit()
 
 async def delete_user_by_username(username: str):
+    """Удаляет привязку пользователя по нику Roblox (для команды /reset)"""
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute("DELETE FROM users WHERE roblox_username COLLATE NOCASE = ?", (username,))
         deleted = cursor.rowcount > 0
@@ -79,7 +90,7 @@ async def delete_user_by_username(username: str):
         return deleted
 
 async def log_authorization(tg_id: int, tg_username: str, roblox_username: str):
-    # Время по МСК (или просто текущее системное)
+    """Записывает успешный вход в таблицу логов"""
     now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -88,12 +99,13 @@ async def log_authorization(tg_id: int, tg_username: str, roblox_username: str):
         )
         await db.commit()
 
-# Получение всех логов
 async def get_all_logs():
+    """Получает все логи из базы для команды /logs"""
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT tg_id, tg_username, roblox_username, timestamp FROM logs ORDER BY id DESC") as cursor:
             return await cursor.fetchall()
 
+# ==========================================================
 
 # 2. ФУНКЦИИ ROBLOX API
 async def get_roblox_user_id(username: str):
