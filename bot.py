@@ -187,71 +187,7 @@ async def accept_join_request(group_id: int, roblox_user_id: int):
 # 3. БОТ (ХЭНДЛЕРЫ)
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
-
-# Команда /reset Никнейм (только для админа)
-@dp.message(Command("reset"))
-async def cmd_reset_user(message: Message, command: CommandObject):
-    if message.from_user.id != ADMIN_ID:
-        return 
-        
-    if not command.args:
-        await message.answer(
-            "⚠️ <b>Ошибка:</b> Не указан никнейм.\n"
-            "Использование: <code>/reset НикИгрока</code>\n"
-            "Пример: <code>/reset Builderman</code>"
-        )
-        return
-        
-    username_to_reset = command.args.strip()
-    is_deleted = await delete_user_by_username(username_to_reset)
-    
-    if is_deleted:
-        await message.answer(
-            f"✅ Привязка для аккаунта <b>{username_to_reset}</b> успешно удалена из базы!\n\n"
-            f"Теперь пользователь сможет отправить новую заявку и привязать новый никнейм."
-        )
-    else:
-        await message.answer(f"❌ Аккаунт <b>{username_to_reset}</b> не найден в базе данных.")
-
 from aiogram import html
-
-@dp.message(CommandStart())
-async def cmd_start(message: Message):
-    user_data = await get_user(message.from_user.id)
-    if user_data:
-        await message.answer(f"Ты уже привязал аккаунт <b>{user_data[0]}</b>. Статус: {user_data[2]}")
-    else:
-        await message.answer("Пришли мне свой никнейм в Roblox (только точный ник!):")
-
-@dp.message()
-async def process_nickname(message: Message):
-    user_id = message.from_user.id
-    if await get_user(user_id):
-        await message.answer("Никнейм уже привязан.")
-        return
-        
-    username = message.text.strip()
-    roblox_id, real_username = await get_roblox_user_id(username)
-    if not roblox_id:
-        await message.answer("❌ Игрок не найден. Проверь ник.")
-        return
-        
-    if not await register_user(user_id, real_username, roblox_id):
-        await message.answer("❌ Этот аккаунт уже используется.")
-        return
-        
-    markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Я нажал(а) Join Group", callback_data=f"check_{user_id}")]
-    ])
-    
-    await message.answer(
-        f"✅ Никнейм <b>{real_username}</b> найден!\n\n"
-        f"⚠️ <b>Остался последний шаг:</b>\n"
-        f"1. Открой нашу группу в Roblox\n"
-        f"2. Нажми кнопку <b>'Join Group'</b> (отправь заявку)\n"
-        f"3. ТОЛЬКО ПОСЛЕ ЭТОГО нажми кнопку ниже, чтобы бот проверил твой аккаунт.",
-        reply_markup=markup
-    )
 
 @dp.callback_query(F.data.startswith('check_'))
 async def process_check_join(callback: CallbackQuery):
@@ -339,49 +275,104 @@ async def handle_reject(callback: CallbackQuery):
     try: await bot.send_message(user_id, f"❌ Извини, твоя заявка для <b>{user_data[0]}</b> отклонена администратором.")
     except: pass
 
-# ==================== НОВЫЕ КОМАНДЫ (ВСТАВИТЬ СЮДА) ====================
+# ==================== КОМАНДЫ БОТА (ВЕРНЫЙ ПОРЯДОК) ====================
 
-# Команда /admin ID (доступна только Создателю)
+# 1. Команда /reset
+@dp.message(Command("reset"))
+async def cmd_reset_user(message: Message, command: CommandObject):
+    if message.from_user.id != ADMIN_ID:
+        return 
+        
+    if not command.args:
+        await message.answer(
+            "⚠️ <b>Ошибка:</b> Не указан никнейм.\n"
+            "Использование: <code>/reset НикИгрока</code>\n"
+            "Пример: <code>/reset Builderman</code>"
+        )
+        return
+        
+    username_to_reset = command.args.strip()
+    is_deleted = await delete_user_by_username(username_to_reset)
+    
+    if is_deleted:
+        await message.answer(
+            f"✅ Привязка для аккаунта <b>{username_to_reset}</b> успешно удалена из базы!\n\n"
+            f"Теперь пользователь сможет отправить новую заявку и привязать новый никнейм."
+        )
+    else:
+        await message.answer(f"❌ Аккаунт <b>{username_to_reset}</b> не найден в базе данных.")
+
+# 2. Команда /admin (ПЕРЕНЕСИ СЮДА)
 @dp.message(Command("admin"))
 async def cmd_change_admin(message: Message, command: CommandObject):
-    global ADMIN_ID  # Указываем Python, что меняем глобальную переменную
+    global ADMIN_ID
     if message.from_user.id != CREATOR_ID:
         return
-
     if not command.args or not command.args.strip().isdigit():
         await message.answer("⚠️ Использование: <code>/admin ID_ПОЛЬЗОВАТЕЛЯ</code>")
         return
-
     new_admin_id = int(command.args.strip())
     ADMIN_ID = new_admin_id
     await message.answer(f"👑 Новый администратор назначен! ID: <code>{new_admin_id}</code>.")
 
-# Команда /logs (доступна Создателю и текущему Админу)
+# 3. Команда /logs (ПЕРЕНЕСИ СЮДА)
 @dp.message(Command("logs"))
 async def cmd_view_logs(message: Message):
-    # Теперь и CREATOR_ID, и ADMIN_ID объявлены выше по коду, ошибки не будет
     if message.from_user.id not in (CREATOR_ID, ADMIN_ID):
         return
-
     logs = await get_all_logs()
     if not logs:
         await message.answer("🗄 Список логов авторизации пока пуст.")
         return
-
-    text = "📋 <b>Логи авторизаций в Roblox:</b>\n\n"
+    text = "📋 <b>Логи авторизаций in Roblox:</b>\n\n"
     for tg_id, tg_username, roblox_username, timestamp in logs:
         display_name = f"@{tg_username}" if tg_username else "Пользователь"
         safe_name = html.quote(display_name)
-        
         line = f"🕒 [{timestamp}] 👤 <a href='tg://user?id={tg_id}'>{safe_name}</a> (<code>{tg_id}</code>) ➔ 🎮 <b>{roblox_username}</b>\n"
-        
         if len(text) + len(line) > 4000:
             await message.answer(text, disable_web_page_preview=True)
             text = ""
         text += line
-
     if text:
         await message.answer(text, disable_web_page_preview=True)
+
+@dp.message(CommandStart())
+async def cmd_start(message: Message):
+    user_data = await get_user(message.from_user.id)
+    if user_data:
+        await message.answer(f"Ты уже привязал аккаунт <b>{user_data[0]}</b>. Статус: {user_data[2]}")
+    else:
+        await message.answer("Пришли мне свой никнейм в Roblox (только точный ник!):")
+
+@dp.message()
+async def process_nickname(message: Message):
+    user_id = message.from_user.id
+    if await get_user(user_id):
+        await message.answer("Никнейм уже привязан.")
+        return
+        
+    username = message.text.strip()
+    roblox_id, real_username = await get_roblox_user_id(username)
+    if not roblox_id:
+        await message.answer("❌ Игрок не найден. Проверь ник.")
+        return
+        
+    if not await register_user(user_id, real_username, roblox_id):
+        await message.answer("❌ Этот аккаунт уже используется.")
+        return
+        
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Я нажал(а) Join Group", callback_data=f"check_{user_id}")]
+    ])
+    
+    await message.answer(
+        f"✅ Никнейм <b>{real_username}</b> найден!\n\n"
+        f"⚠️ <b>Остался последний шаг:</b>\n"
+        f"1. Открой нашу группу в Roblox\n"
+        f"2. Нажми кнопку <b>'Join Group'</b> (отправь заявку)\n"
+        f"3. ТОЛЬКО ПОСЛЕ ЭТОГО нажми кнопку ниже, чтобы бот проверил твой аккаунт.",
+        reply_markup=markup
+    )
 
 
 # ==================== ЗАПУСК БОТА ====================
