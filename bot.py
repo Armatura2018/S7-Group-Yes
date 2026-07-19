@@ -17,7 +17,7 @@ load_dotenv()
 
 # ==================== НАСТРОЙКИ ====================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
+CREATOR_ID = int(os.getenv("CREATOR_ID", 0))
 GROUP_ID = int(os.getenv("GROUP_ID", 0))
 ROBLOX_COOKIE = os.getenv("ROBLOX_COOKIE")
 
@@ -34,6 +34,7 @@ async def init_db():
     db_file.parent.mkdir(parents=True, exist_ok=True)
     
     async with aiosqlite.connect(DB_PATH) as db:
+        # Таблица пользователей
         await db.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 tg_id INTEGER PRIMARY KEY,
@@ -42,13 +43,18 @@ async def init_db():
                 status TEXT DEFAULT 'pending'
             )
         ''')
+        # НОВАЯ: Таблица логов авторизации (сохраняем также юзернейм в ТГ для таблицы логов)
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tg_id INTEGER,
+                tg_username TEXT,
+                roblox_username TEXT,
+                timestamp TEXT
+            )
+        ''')
         await db.commit()
     print(f"База данных инициализирована по пути: {DB_PATH}")
-
-async def get_user(tg_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT roblox_username, roblox_user_id, status FROM users WHERE tg_id = ?", (tg_id,)) as cursor:
-            return await cursor.fetchone()
 
 async def register_user(tg_id, username, roblox_id):
     try:
@@ -70,6 +76,22 @@ async def delete_user_by_username(username: str):
         deleted = cursor.rowcount > 0
         await db.commit()
         return deleted
+
+async def log_authorization(tg_id: int, tg_username: str, roblox_username: str):
+    # Время по МСК (или просто текущее системное)
+    now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO logs (tg_id, tg_username, roblox_username, timestamp) VALUES (?, ?, ?, ?)",
+            (tg_id, tg_username, roblox_username, now_str)
+        )
+        await db.commit()
+
+# Получение всех логов
+async def get_all_logs():
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT tg_id, tg_username, roblox_username, timestamp FROM logs ORDER BY id DESC") as cursor:
+            return await cursor.fetchall()
 
 
 # 2. ФУНКЦИИ ROBLOX API
@@ -178,6 +200,52 @@ async def cmd_reset_user(message: Message, command: CommandObject):
     else:
         await message.answer(f"❌ Аккаунт <b>{username_to_reset}</b> не найден в базе данных.")
 
+from aiogram import html
+
+# Команда /admin ID (доступна только Создателю из переменной окружения)
+@dp.message(Command("admin"))
+async def cmd_change_admin(message: Message, command: CommandObject):
+    global ADMIN_ID
+    if message.from_user.id != CREATOR_ID: # Убедись, что CREATOR_ID задан в коде
+        return
+
+    if not command.args or not command.args.strip().isdigit():
+        await message.answer("⚠️ Использование: <code>/admin ID_ПОЛЬЗОВАТЕЛЯ</code>")
+        return
+
+    new_admin_id = int(command.args.strip())
+    ADMIN_ID = new_admin_id
+    await message.answer(f"👑 Новый администратор успешно назначен! ID: <code>{new_admin_id}</code>. Теперь все заявки на проверку будут дублироваться ему.")
+
+# Команда /logs (доступна Создателю и текущему Админу)
+@dp.message(Command("logs"))
+async def cmd_view_logs(message: Message):
+    if message.from_user.id not in (CREATOR_ID, ADMIN_ID):
+        return
+
+    logs = await get_all_logs()
+    if not logs:
+        await message.answer("🗄 Список логов авторизации пока пуст.")
+        return
+
+    text = "📋 <b>Логи авторизаций в Roblox:</b>\n\n"
+    
+    for tg_id, tg_username, roblox_username, timestamp in logs:
+        display_name = f"@{tg_username}" if tg_username else "Пользователь"
+        safe_name = html.quote(display_name)
+        
+        # Строка таблицы с кликабельным TG ником, ID в скобках и ником Roblox
+        line = f"🕒 [{timestamp}] 👤 <a href='tg://user?id={tg_id}'>{safe_name}</a> (<code>{tg_id}</code>) ➔ 🎮 <b>{roblox_username}</b>\n"
+        
+        # Лимит одного сообщения в ТГ — 4096 символов. Разбиваем, если логов слишком много
+        if len(text) + len(line) > 4000:
+            await message.answer(text, disable_web_page_preview=True)
+            text = ""
+        text += line
+
+    if text:
+        await message.answer(text, disable_web_page_preview=True)
+
 
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
@@ -258,6 +326,8 @@ async def process_check_join(callback: CallbackQuery):
         success, message_text = await accept_join_request(GROUP_ID, roblox_id)
         if success:
             await update_status(user_id, 'approved')
+            await log_authorization(user_id, callback.from_user.username, roblox_username)
+            
             await callback.message.edit_text(
                 f"🎉 Авто-проверка пройдена успешно!\n"
                 f"Бот автоматически принял тебя в группу Roblox под ником <b>{roblox_username}</b>!"
@@ -282,6 +352,7 @@ async def handle_approve(callback: CallbackQuery):
     success, msg = await accept_join_request(GROUP_ID, user_data[1])
     if success:
         await update_status(user_id, 'approved')
+        await log_authorization(user_id, callback.from_user.username, user_data[0])
         await callback.message.edit_text(f"✅ Заявка {user_data[0]} (TG: {user_id}) одобрена вручную!")
         try: await bot.send_message(user_id, f"🎉 Твоя заявка была одобрена администратором!") 
         except: pass
