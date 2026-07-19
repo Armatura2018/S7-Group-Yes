@@ -10,6 +10,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.filters import CommandStart, Command, CommandObject
 from aiogram.enums import ParseMode
 from dotenv import load_dotenv
+from pathlib import Path
 
 logging.basicConfig(level=logging.INFO)
 load_dotenv()
@@ -22,7 +23,28 @@ ROBLOX_COOKIE = os.getenv("ROBLOX_COOKIE")
 
 BLACKLIST_GROUPS_RAW = os.getenv("BLACKLIST_GROUPS", "")
 BLACKLIST_GROUPS = [int(g.strip()) for g in BLACKLIST_GROUPS_RAW.split(",") if g.strip().isdigit()]
+DB_PATH_STR = os.getenv("DATABASE_PATH", "/app/data/bot.db")
+DB_PATH = Path(DB_PATH_STR)
 # ===================================================
+
+def init_db():
+    # Создаем папку data, если её нет
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Подключаемся (если файла нет, SQLite создаст его автоматически)
+    conn = sqlite3.connect(str(DB_PATH))
+    
+    # Создаем таблицы
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY,
+            username TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
+    print(f"База данных готова к работе: {DB_PATH}")
 
 # 1. БАЗА ДАННЫХ
 def init_db():
@@ -308,7 +330,12 @@ async def handle_reject(callback: CallbackQuery):
     try: await bot.send_message(user_id, f"❌ Извини, твоя заявка для <b>{user_data[0]}</b> отклонена администратором.")
     except: pass
 
-
+if __name__ == '__main__':
+    # Обязательно вызываем создание базы ДО старта самого бота
+    init_db()
+    
+    print("Запускаю бота...")
+    
 async def main():
     init_db()
     print("Бот с фильтром запущен!")
