@@ -203,51 +203,6 @@ async def cmd_reset_user(message: Message, command: CommandObject):
 
 from aiogram import html
 
-# Команда /admin ID (доступна только Создателю из переменной окружения)
-@dp.message(Command("admin"))
-async def cmd_change_admin(message: Message, command: CommandObject):
-    global ADMIN_ID
-    if message.from_user.id != CREATOR_ID: # Убедись, что CREATOR_ID задан в коде
-        return
-
-    if not command.args or not command.args.strip().isdigit():
-        await message.answer("⚠️ Использование: <code>/admin ID_ПОЛЬЗОВАТЕЛЯ</code>")
-        return
-
-    new_admin_id = int(command.args.strip())
-    ADMIN_ID = new_admin_id
-    await message.answer(f"👑 Новый администратор успешно назначен! ID: <code>{new_admin_id}</code>. Теперь все заявки на проверку будут дублироваться ему.")
-
-# Команда /logs (доступна Создателю и текущему Админу)
-@dp.message(Command("logs"))
-async def cmd_view_logs(message: Message):
-    if message.from_user.id not in (CREATOR_ID, ADMIN_ID):
-        return
-
-    logs = await get_all_logs()
-    if not logs:
-        await message.answer("🗄 Список логов авторизации пока пуст.")
-        return
-
-    text = "📋 <b>Логи авторизаций в Roblox:</b>\n\n"
-    
-    for tg_id, tg_username, roblox_username, timestamp in logs:
-        display_name = f"@{tg_username}" if tg_username else "Пользователь"
-        safe_name = html.quote(display_name)
-        
-        # Строка таблицы с кликабельным TG ником, ID в скобках и ником Roblox
-        line = f"🕒 [{timestamp}] 👤 <a href='tg://user?id={tg_id}'>{safe_name}</a> (<code>{tg_id}</code>) ➔ 🎮 <b>{roblox_username}</b>\n"
-        
-        # Лимит одного сообщения в ТГ — 4096 символов. Разбиваем, если логов слишком много
-        if len(text) + len(line) > 4000:
-            await message.answer(text, disable_web_page_preview=True)
-            text = ""
-        text += line
-
-    if text:
-        await message.answer(text, disable_web_page_preview=True)
-
-
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     user_data = await get_user(message.from_user.id)
@@ -372,9 +327,54 @@ async def handle_reject(callback: CallbackQuery):
     try: await bot.send_message(user_id, f"❌ Извини, твоя заявка для <b>{user_data[0]}</b> отклонена администратором.")
     except: pass
 
+# ==================== НОВЫЕ КОМАНДЫ (ВСТАВИТЬ СЮДА) ====================
 
+# Команда /admin ID (доступна только Создателю)
+@dp.message(Command("admin"))
+async def cmd_change_admin(message: Message, command: CommandObject):
+    global ADMIN_ID  # Указываем Python, что меняем глобальную переменную
+    if message.from_user.id != CREATOR_ID:
+        return
+
+    if not command.args or not command.args.strip().isdigit():
+        await message.answer("⚠️ Использование: <code>/admin ID_ПОЛЬЗОВАТЕЛЯ</code>")
+        return
+
+    new_admin_id = int(command.args.strip())
+    ADMIN_ID = new_admin_id
+    await message.answer(f"👑 Новый администратор назначен! ID: <code>{new_admin_id}</code>.")
+
+# Команда /logs (доступна Создателю и текущему Админу)
+@dp.message(Command("logs"))
+async def cmd_view_logs(message: Message):
+    # Теперь и CREATOR_ID, и ADMIN_ID объявлены выше по коду, ошибки не будет
+    if message.from_user.id not in (CREATOR_ID, ADMIN_ID):
+        return
+
+    logs = await get_all_logs()
+    if not logs:
+        await message.answer("🗄 Список логов авторизации пока пуст.")
+        return
+
+    text = "📋 <b>Логи авторизаций в Roblox:</b>\n\n"
+    for tg_id, tg_username, roblox_username, timestamp in logs:
+        display_name = f"@{tg_username}" if tg_username else "Пользователь"
+        safe_name = html.quote(display_name)
+        
+        line = f"🕒 [{timestamp}] 👤 <a href='tg://user?id={tg_id}'>{safe_name}</a> (<code>{tg_id}</code>) ➔ 🎮 <b>{roblox_username}</b>\n"
+        
+        if len(text) + len(line) > 4000:
+            await message.answer(text, disable_web_page_preview=True)
+            text = ""
+        text += line
+
+    if text:
+        await message.answer(text, disable_web_page_preview=True)
+
+
+# ==================== ЗАПУСК БОТА ====================
 async def main():
-    await init_db()  # Обязательно добавляем await сюда!
+    await init_db()
     print("Бот с фильтром запущен!")
     await dp.start_polling(bot)
 
