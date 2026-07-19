@@ -1,8 +1,9 @@
 import os
-import sqlite3
 import asyncio
 import logging
 import aiohttp
+import aiosqlite
+from pathlib import Path
 from datetime import datetime, timezone
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
@@ -10,7 +11,6 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.filters import CommandStart, Command, CommandObject
 from aiogram.enums import ParseMode
 from dotenv import load_dotenv
-from pathlib import Path
 
 logging.basicConfig(level=logging.INFO)
 load_dotenv()
@@ -23,79 +23,53 @@ ROBLOX_COOKIE = os.getenv("ROBLOX_COOKIE")
 
 BLACKLIST_GROUPS_RAW = os.getenv("BLACKLIST_GROUPS", "")
 BLACKLIST_GROUPS = [int(g.strip()) for g in BLACKLIST_GROUPS_RAW.split(",") if g.strip().isdigit()]
-DB_PATH_STR = os.getenv("DATABASE_PATH", "/app/data/bot.db")
-DB_PATH = Path(DB_PATH_STR)
+
+# Путь к базе данных (по умолчанию data/bot_database.db)
+DB_PATH = os.getenv("DATABASE_PATH", "data/bot_database.db")
 # ===================================================
 
-def init_db():
-    # Создаем папку data, если её нет
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+# 1. АСИНХРОННАЯ БАЗА ДАННЫХ (aiosqlite)
+async def init_db():
+    db_file = Path(DB_PATH)
+    db_file.parent.mkdir(parents=True, exist_ok=True)
     
-    # Подключаемся (если файла нет, SQLite создаст его автоматически)
-    conn = sqlite3.connect(str(DB_PATH))
-    
-    # Создаем таблицы
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY,
-            username TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    conn.commit()
-    conn.close()
-    print(f"База данных готова к работе: {DB_PATH}")
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                tg_id INTEGER PRIMARY KEY,
+                roblox_username TEXT UNIQUE,
+                roblox_user_id INTEGER UNIQUE,
+                status TEXT DEFAULT 'pending'
+            )
+        ''')
+        await db.commit()
+    print(f"База данных инициализирована по пути: {DB_PATH}")
 
-# 1. БАЗА ДАННЫХ
-def init_db():
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            tg_id INTEGER PRIMARY KEY,
-            roblox_username TEXT UNIQUE,
-            roblox_user_id INTEGER UNIQUE,
-            status TEXT DEFAULT 'pending'
-        )
-    ''')
-    conn.commit()
-    conn.close()
+async def get_user(tg_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT roblox_username, roblox_user_id, status FROM users WHERE tg_id = ?", (tg_id,)) as cursor:
+            return await cursor.fetchone()
 
-def get_user(tg_id):
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT roblox_username, roblox_user_id, status FROM users WHERE tg_id = ?", (tg_id,))
-    row = cursor.fetchone()
-    conn.close()
-    return row
-
-def register_user(tg_id, username, roblox_id):
+async def register_user(tg_id, username, roblox_id):
     try:
-        conn = sqlite3.connect('bot_database.db')
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO users (tg_id, roblox_username, roblox_user_id) VALUES (?, ?, ?)", (tg_id, username, roblox_id))
-        conn.commit()
-        conn.close()
-        return True
-    except sqlite3.IntegrityError:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("INSERT INTO users (tg_id, roblox_username, roblox_user_id) VALUES (?, ?, ?)", (tg_id, username, roblox_id))
+            await db.commit()
+            return True
+    except aiosqlite.IntegrityError:
         return False
 
-def update_status(tg_id, status):
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET status = ? WHERE tg_id = ?", (status, tg_id))
-    conn.commit()
-    conn.close()
+async def update_status(tg_id, status):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE users SET status = ? WHERE tg_id = ?", (status, tg_id))
+        await db.commit()
 
-# НОВАЯ ФУНКЦИЯ: Удаление пользователя по нику (без учета регистра)
-def delete_user_by_username(username: str):
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM users WHERE roblox_username COLLATE NOCASE = ?", (username,))
-    deleted = cursor.rowcount > 0  # True если удалили хотя бы 1 строку
-    conn.commit()
-    conn.close()
-    return deleted
+async def delete_user_by_username(username: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("DELETE FROM users WHERE roblox_username COLLATE NOCASE = ?", (username,))
+        deleted = cursor.rowcount > 0
+        await db.commit()
+        return deleted
 
 
 # 2. ФУНКЦИИ ROBLOX API
@@ -179,14 +153,12 @@ async def accept_join_request(group_id: int, roblox_user_id: int):
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-# НОВАЯ КОМАНДА: /reset Никнейм (только для админа)
+# Команда /reset Никнейм (только для админа)
 @dp.message(Command("reset"))
 async def cmd_reset_user(message: Message, command: CommandObject):
-    # Проверка, что пишет админ
     if message.from_user.id != ADMIN_ID:
-        return # Просто игнорируем, если пишет не админ
+        return 
         
-    # Проверка, передан ли никнейм
     if not command.args:
         await message.answer(
             "⚠️ <b>Ошибка:</b> Не указан никнейм.\n"
@@ -196,14 +168,12 @@ async def cmd_reset_user(message: Message, command: CommandObject):
         return
         
     username_to_reset = command.args.strip()
-    
-    # Пытаемся удалить из БД
-    is_deleted = delete_user_by_username(username_to_reset)
+    is_deleted = await delete_user_by_username(username_to_reset)
     
     if is_deleted:
         await message.answer(
             f"✅ Привязка для аккаунта <b>{username_to_reset}</b> успешно удалена из базы!\n\n"
-            f"Теперь пользователь, привязывавший этот ник, сможет отправить новую заявку и привязать новый никнейм."
+            f"Теперь пользователь сможет отправить новую заявку и привязать новый никнейм."
         )
     else:
         await message.answer(f"❌ Аккаунт <b>{username_to_reset}</b> не найден в базе данных.")
@@ -211,7 +181,7 @@ async def cmd_reset_user(message: Message, command: CommandObject):
 
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
-    user_data = get_user(message.from_user.id)
+    user_data = await get_user(message.from_user.id)
     if user_data:
         await message.answer(f"Ты уже привязал аккаунт <b>{user_data[0]}</b>. Статус: {user_data[2]}")
     else:
@@ -220,7 +190,7 @@ async def cmd_start(message: Message):
 @dp.message()
 async def process_nickname(message: Message):
     user_id = message.from_user.id
-    if get_user(user_id):
+    if await get_user(user_id):
         await message.answer("Никнейм уже привязан.")
         return
         
@@ -230,7 +200,7 @@ async def process_nickname(message: Message):
         await message.answer("❌ Игрок не найден. Проверь ник.")
         return
         
-    if not register_user(user_id, real_username, roblox_id):
+    if not await register_user(user_id, real_username, roblox_id):
         await message.answer("❌ Этот аккаунт уже используется.")
         return
         
@@ -254,7 +224,7 @@ async def process_check_join(callback: CallbackQuery):
         await callback.answer("Это не твоя кнопка!", show_alert=True)
         return
 
-    user_data = get_user(user_id)
+    user_data = await get_user(user_id)
     roblox_username, roblox_id, status = user_data
     
     if status != 'pending':
@@ -287,7 +257,7 @@ async def process_check_join(callback: CallbackQuery):
     else:
         success, message_text = await accept_join_request(GROUP_ID, roblox_id)
         if success:
-            update_status(user_id, 'approved')
+            await update_status(user_id, 'approved')
             await callback.message.edit_text(
                 f"🎉 Авто-проверка пройдена успешно!\n"
                 f"Бот автоматически принял тебя в группу Roblox под ником <b>{roblox_username}</b>!"
@@ -306,12 +276,12 @@ async def process_check_join(callback: CallbackQuery):
 async def handle_approve(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID: return
     user_id = int(callback.data.split('_')[1])
-    user_data = get_user(user_id)
+    user_data = await get_user(user_id)
     if not user_data or user_data[2] == 'approved': return
         
     success, msg = await accept_join_request(GROUP_ID, user_data[1])
     if success:
-        update_status(user_id, 'approved')
+        await update_status(user_id, 'approved')
         await callback.message.edit_text(f"✅ Заявка {user_data[0]} (TG: {user_id}) одобрена вручную!")
         try: await bot.send_message(user_id, f"🎉 Твоя заявка была одобрена администратором!") 
         except: pass
@@ -322,22 +292,17 @@ async def handle_approve(callback: CallbackQuery):
 async def handle_reject(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID: return
     user_id = int(callback.data.split('_')[1])
-    user_data = get_user(user_id)
+    user_data = await get_user(user_id)
     if not user_data or user_data[2] == 'rejected': return
         
-    update_status(user_id, 'rejected')
+    await update_status(user_id, 'rejected')
     await callback.message.edit_text(f"❌ Заявка {user_data[0]} отклонена.")
     try: await bot.send_message(user_id, f"❌ Извини, твоя заявка для <b>{user_data[0]}</b> отклонена администратором.")
     except: pass
 
-if __name__ == '__main__':
-    # Обязательно вызываем создание базы ДО старта самого бота
-    init_db()
-    
-    print("Запускаю бота...")
-    
+
 async def main():
-    init_db()
+    await init_db()  # Обязательно добавляем await сюда!
     print("Бот с фильтром запущен!")
     await dp.start_polling(bot)
 
