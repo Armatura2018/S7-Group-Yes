@@ -99,10 +99,21 @@ async def log_authorization(tg_id: int, tg_username: str, roblox_username: str):
         )
         await db.commit()
 
-async def get_all_logs():
-    """Получает все логи из базы для команды /logs"""
+# Получение общего количества логов в базе
+async def get_logs_count():
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT tg_id, tg_username, roblox_username, timestamp FROM logs ORDER BY id DESC") as cursor:
+        async with db.execute("SELECT COUNT(*) FROM logs") as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else 0
+
+# Получение конкретной страницы логов
+async def get_logs_page(page: int, per_page: int):
+    offset = page * per_page
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT tg_id, tg_username, roblox_username, timestamp FROM logs ORDER BY id DESC LIMIT ? OFFSET ?",
+            (per_page, offset)
+        ) as cursor:
             return await cursor.fetchall()
 
 # ==========================================================
@@ -275,6 +286,59 @@ async def handle_reject(callback: CallbackQuery):
     try: await bot.send_message(user_id, f"❌ Извини, твоя заявка для <b>{user_data[0]}</b> отклонена администратором.")
     except: pass
 
+
+LOGS_PER_PAGE = 7  # Количество логов на одной странице
+
+async def send_logs_page(event, page: int):
+    is_callback = isinstance(event, CallbackQuery)
+    message = event.message if is_callback else event
+    user_id = event.from_user.id
+
+    # Проверка прав доступа
+    if user_id not in (CREATOR_ID, ADMIN_ID):
+        if is_callback:
+            await event.answer("У вас нет прав.", show_alert=True)
+        return
+
+    total_count = await get_logs_count()
+    if total_count == 0:
+        text = "🗄 Список логов авторизации пока пуст."
+        if is_callback:
+            await event.message.edit_text(text, reply_markup=None)
+            await event.answer()
+        else:
+            await message.answer(text)
+        return
+
+    # Высчитываем общее число страниц
+    total_pages = (total_count - 1) // LOGS_PER_PAGE + 1
+    if page < 0: page = 0
+    if page >= total_pages: page = total_pages - 1
+
+    logs = await get_logs_page(page, LOGS_PER_PAGE)
+
+    text = f"📋 <b>Логи авторизаций в Roblox (Страница {page + 1}/{total_pages}):</b>\n\n"
+    for tg_id, tg_username, roblox_username, timestamp in logs:
+        display_name = f"@{tg_username}" if tg_username else "Пользователь"
+        safe_name = html.quote(display_name)
+        text += f"🕒 [{timestamp}] 👤 <a href='tg://user?id={tg_id}'>{safe_name}</a> (<code>{tg_id}</code>) ➔ 🎮 <b>{roblox_username}</b>\n"
+
+    # Создаем кнопки навигации
+    markup = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="⬅️ Назад", callback_data=f"logspage_{page-1}") if page > 0 else InlineKeyboardButton(text="⏹️", callback_data="ignore_click"),
+        InlineKeyboardButton(text=f"Стр. {page+1}/{total_pages}", callback_data="ignore_click"),
+        InlineKeyboardButton(text="Вперед ➡️", callback_data=f"logspage_{page+1}") if page < total_pages - 1 else InlineKeyboardButton(text="⏹️", callback_data="ignore_click")
+    ]])
+
+    if is_callback:
+        try:
+            await event.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
+        except Exception:
+            pass
+        await event.answer()
+    else:
+        await message.answer(text, reply_markup=markup, disable_web_page_preview=True)
+
 # ==================== КОМАНДЫ БОТА (ВЕРНЫЙ ПОРЯДОК) ====================
 
 # 1. Команда /reset
@@ -316,25 +380,21 @@ async def cmd_change_admin(message: Message, command: CommandObject):
     await message.answer(f"👑 Новый администратор назначен! ID: <code>{new_admin_id}</code>.")
 
 # 3. Команда /logs (ПЕРЕНЕСИ СЮДА)
+# Команда /logs — всегда открывает самую первую страницу (индекс 0)
 @dp.message(Command("logs"))
 async def cmd_view_logs(message: Message):
-    if message.from_user.id not in (CREATOR_ID, ADMIN_ID):
-        return
-    logs = await get_all_logs()
-    if not logs:
-        await message.answer("🗄 Список логов авторизации пока пуст.")
-        return
-    text = "📋 <b>Логи авторизаций in Roblox:</b>\n\n"
-    for tg_id, tg_username, roblox_username, timestamp in logs:
-        display_name = f"@{tg_username}" if tg_username else "Пользователь"
-        safe_name = html.quote(display_name)
-        line = f"🕒 [{timestamp}] 👤 <a href='tg://user?id={tg_id}'>{safe_name}</a> (<code>{tg_id}</code>) ➔ 🎮 <b>{roblox_username}</b>\n"
-        if len(text) + len(line) > 4000:
-            await message.answer(text, disable_web_page_preview=True)
-            text = ""
-        text += line
-    if text:
-        await message.answer(text, disable_web_page_preview=True)
+    await send_logs_page(message, page=0)
+
+# Обработка нажатий на стрелочки "Вперед" и "Назад"
+@dp.callback_query(F.data.startswith("logspage_"))
+async def process_logs_page(call: CallbackQuery):
+    page = int(call.data.split("_")[1])
+    await send_logs_page(call, page)
+
+# Заглушка для некликабельных кнопок (чтобы часы загрузки на кнопке исчезали)
+@dp.callback_query(F.data == "ignore_click")
+async def process_ignore_click(call: CallbackQuery):
+    await call.answer()
 
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
