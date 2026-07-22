@@ -1,445 +1,736 @@
-import os
+import discord
+from discord import app_commands
+from discord.ext import commands
+import datetime
 import asyncio
-import logging
-import aiohttp
-import aiosqlite
+import os
+import json
 from pathlib import Path
-from datetime import datetime, timezone
-from aiogram import Bot, Dispatcher, F
-from aiogram.client.default import DefaultBotProperties
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.filters import CommandStart, Command, CommandObject
-from aiogram.enums import ParseMode
-from dotenv import load_dotenv
 
-logging.basicConfig(level=logging.INFO)
-load_dotenv()
+DATA_DIR = Path("/app/data")
+if not DATA_DIR.exists():
+    DATA_DIR = Path("./data")
 
-# ==================== НАСТРОЙКИ ====================
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
-GROUP_ID = int(os.getenv("GROUP_ID", 0))
-ROBLOX_COOKIE = os.getenv("ROBLOX_COOKIE")
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+CONFIG_PATH = DATA_DIR / "config.json"
 
-# Добавь эту строчку, чтобы CREATOR_ID существовал глобально с самого старта
-CREATOR_ID = int(os.getenv("CREATOR_ID", 0)) 
+# --- ЦВЕТОВАЯ ПАЛИТРА БРЕНДА S7 AIRLINES ---
+EMBED_COLOR = discord.Color(0xbddc03) # Фирменный салатовый цвет #bddc03
 
-BLACKLIST_GROUPS_RAW = os.getenv("BLACKLIST_GROUPS", "")
-BLACKLIST_GROUPS = [int(g.strip()) for g in BLACKLIST_GROUPS_RAW.split(",") if g.strip().isdigit()]
-DB_PATH = os.getenv("DATABASE_PATH", "data/bot_database.db")
-# ===================================================
+# --- ЛОКАЛИЗАЦИЯ И ТЕКСТЫ (Официальный стиль S7 Airlines) ---
+TRANSLATIONS = {
+    'ru': {
+        'dm_welcome_title': "Спасибо за открытие обращения",
+        'dm_welcome_desc': "-# Для того чтобы наша команда могла оказать вам помощь как можно быстрее, пожалуйста, опишите ваш запрос максимально подробно. Мы оперативно передадим его дежурным агентам поддержки.",
+        'ask_description': "Пожалуйста, подробно опишите суть вашего вопроса в одном сообщении ниже.",
+        'footer_bot': "Вы сейчас разговариваете с ботом",
+        'footer_agent': "Вы сейчас разговариваете с агентом",
+        'check_dm_title': "Обращение формируется",
+        'check_dm_desc': "Пожалуйста, проверьте ваши личные сообщения для продолжения диалога.",
+        'check_dm_btn': "Перейти в ЛС",
+        'ticket_opened_title': "Обращение открыто",
+        'ticket_opened_desc': "> Ваш запрос был успешно зарегистрирован. Агенты клиентской службы уведомлены о вашем обращении. Благодарим за ожидание.",
+        'eta_text': "\n\nОжидаемое время ответа агента составляет: **{eta}**.\n-# Данное время является ориентировочным. В периоды высокой загрузки службы поддержки время ожидания может быть увеличено.",
+        'rejected_title': "Запрос отклонен",
+        'rejected_desc': "Приносим свои извинения, но агенты поддержки посчитали ваш запрос некорректным или недостаточно информативным для открытия сессии.",
+        'accepted_title': "Клиентская поддержка",
+        'accepted_desc': "### Ваш запрос был принят в работу\n> Благодарим за обращение в службу поддержки S7 Airlines. Вы были успешно подключены к нашему агенту. Мы стремимся к обеспечению наивысшего уровня сервиса и надеемся предоставить вам всю необходимую помощь.",
+        'accepted_instruction': "\n\n-# Чтобы мы могли оказать вам более эффективную помощь, пожалуйста, формулируйте свой запрос четко и кратко, это позволит нам предоставить точную и своевременную поддержку. Просим вас проявить терпение и вежливость, пока мы работаем над тем, чтобы помочь вам.",
+        'still_here_title': "Вы еще здесь?",
+        'still_here_desc': "> Поскольку мы не получили от вас ответа по решению вашего вопроса, мы просим подтвердить актуальность вашего обращения.",
+        'still_here_warning': "\n\n-# Если вам требуется дополнительное время для сбора информации или у вас остались вопросы, пожалуйста, отправьте любое сообщение в этот чат. В противном случае запрос будет автоматически закрыт через 6 часов.",
+        'closed_title': "Вопрос решен",
+        'closed_desc': "> Благодарим за обращение в службу поддержки S7 Airlines. Мы были рады помочь вам в решении вашего вопроса. Пожалуйста, не стесняйтесь обращаться к нам снова при возникновении трудностей.",
+        'closed_footer': "\n-# Мы всегда доступны для решения ваших вопросов. Спасибо за выбор S7 Airlines.",
+        'closed_action_footer': "Отвечая на это сообщение, вы откроете новое обращение",
+        'client_title': "Клиент",
+        'staff_closed_title': "Обращение закрыто",
+        'staff_closed_desc': "> Текущая сессия поддержки была успешно завершена и перемещена в архив.\n\n**Инициатор закрытия:** {reason}",
+        'staff_reason_manual': "Агент поддержки",
+        'staff_reason_timeout': "Тайм-аут неактивности клиента",
+        'staff_closed_footer': "Архив клиентской службы S7 Airlines",
+        'topic_title': "Выберите тему вашего обращения:",
+        'topic_placeholder': "Выберите категорию...",
+        'topics': {
+            'general': {
+                'label': "Общие вопросы",
+                'desc': "Вопросы по игре, сервисам или общие консультации",
+                'emoji': "❓"
+            },
+            'staff': {
+                'label': "Вопросы по персоналу",
+                'desc': "Жалобы, вопросы по работе администрации или штата",
+                'emoji': "👥"
+            },
+            'partnership': {
+                'label': "Партнерские вопросы",
+                'desc': "Сотрудничество, медиа и коммерция",
+                'emoji': "🤝"
+            }
+        }
+    },
+    'en': {
+        'dm_welcome_title': "Thank you for opening a ticket",
+        'dm_welcome_desc': "-# To help our team assist you as quickly as possible, please describe your request in maximum detail. We will promptly forward it to our support agents.",
+        'ask_description': "Please describe the details of your issue in a single message below.",
+        'footer_bot': "You are currently talking to a bot",
+        'footer_agent': "You are currently talking to an agent",
+        'check_dm_title': "Ticket is being created",
+        'check_dm_desc': "Please check your Direct Messages to continue.",
+        'check_dm_btn': "Go to DMs",
+        'ticket_opened_title': "Ticket Opened",
+        'ticket_opened_desc': "> Your request has been successfully registered. Support agents have been notified. Thank you for your patience.",
+        'eta_text': "\n\nExpected response time: **{eta}**.\n-# This time is approximate. During peak hours, response times may be longer.",
+        'rejected_title': "Request Rejected",
+        'rejected_desc': "We apologize, but our support agents deemed your request incorrect or insufficient to open a support session.",
+        'accepted_title': "Customer Support",
+        'accepted_desc': "### Your request has been accepted\n> Thank you for contacting S7 Airlines Support. You have been successfully connected to our support agent. We strive to provide the highest level of service and hope to resolve your request efficiently.",
+        'accepted_instruction': "\n\n-# To help us assist you more effectively, please keep your responses clear and concise. This allows us to provide accurate and timely support. We kindly ask for your patience and courtesy while we work to assist you.",
+        'still_here_title': "Are you still here?",
+        'still_here_desc': "> As we have not received a response regarding your issue, we kindly ask you to confirm if you still need assistance.",
+        'still_here_warning': "\n\n-# If you need additional time or have further questions, please send a message in this chat. Otherwise, this ticket will automatically close in 6 hours.",
+        'closed_title': "Issue Resolved",
+        'closed_desc': "> Thank you for contacting S7 Airlines Support. It was our pleasure to assist you. Please do not hesitate to reach out to us again if you encounter any issues.",
+        'closed_footer': "\n-# We are always available to resolve your issues. Thank you for choosing S7 Airlines.",
+        'closed_action_footer': "Replying to this message will open a new support ticket",
+        'client_title': "Client",
+        'staff_closed_title': "Ticket Closed",
+        'staff_closed_desc': "> The current support session has been successfully completed and archived.\n\n**Closed by:** {reason}",
+        'staff_reason_manual': "Support Agent",
+        'staff_reason_timeout': "Client Inactivity Timeout",
+        'staff_closed_footer': "S7 Airlines Customer Service Archive",
+        'topic_title': "Select the topic of your request:",
+        'topic_placeholder': "Select a category...",
+        'topics': {
+            'general': {
+                'label': "General Questions",
+                'desc': "Game inquiries, services, or general support",
+                'emoji': "❓"
+            },
+            'staff': {
+                'label': "Staff Questions",
+                'desc': "Feedback, complaints, or staff inquiries",
+                'emoji': "👥"
+            },
+            'partnership': {
+                'label': "Partnership Questions",
+                'desc': "Cooperation, media, and business inquiries",
+                'emoji': "🤝"
+            }
+        }
+    }
+}
 
-# 1. АСИНХРОННАЯ БАЗА ДАННЫХ (aiosqlite)
-async def init_db():
-    db_file = Path(DB_PATH)
-    db_file.parent.mkdir(parents=True, exist_ok=True)
-    
-    async with aiosqlite.connect(DB_PATH) as db:
-        # Таблица пользователей
-        await db.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                tg_id INTEGER PRIMARY KEY,
-                roblox_username TEXT UNIQUE,
-                roblox_user_id INTEGER UNIQUE,
-                status TEXT DEFAULT 'pending'
-            )
-        ''')
-        # НОВАЯ: Таблица логов авторизации (сохраняем также юзернейм в ТГ для таблицы логов)
-        await db.execute('''
-            CREATE TABLE IF NOT EXISTS logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                tg_id INTEGER,
-                tg_username TEXT,
-                roblox_username TEXT,
-                timestamp TEXT
-            )
-        ''')
-        await db.commit()
-    print(f"База данных инициализирована по пути: {DB_PATH}")
+# --- НАСТРОЙКИ БОТА ---
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
 
-# ==================== БЛОК БАЗЫ ДАННЫХ ====================
+class SupportBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix="!", intents=intents)
+        self.synced = False
+        self.config = {} 
+        self.active_tickets = {} 
+        self.eta_time = "15-30 минут" 
+        self.ticket_counter = 1
 
-async def get_user(tg_id: int):
-    """Получает данные пользователя по его Telegram ID"""
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT roblox_username, roblox_user_id, status FROM users WHERE tg_id = ?", (tg_id,)) as cursor:
-            return await cursor.fetchone()
-
-async def register_user(tg_id: int, username: str, roblox_id: int):
-    """Регистрирует новый запрос в базе"""
-    try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("INSERT INTO users (tg_id, roblox_username, roblox_user_id) VALUES (?, ?, ?)", (tg_id, username, roblox_id))
-            await db.commit()
-            return True
-    except aiosqlite.IntegrityError:
-        return False
-
-async def update_status(tg_id: int, status: str):
-    """Обновляет статус заявки (approved/rejected)"""
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE users SET status = ? WHERE tg_id = ?", (status, tg_id))
-        await db.commit()
-
-async def delete_user_by_username(username: str):
-    """Удаляет привязку пользователя по нику Roblox (для команды /reset)"""
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute("DELETE FROM users WHERE roblox_username COLLATE NOCASE = ?", (username,))
-        deleted = cursor.rowcount > 0
-        await db.commit()
-        return deleted
-
-async def log_authorization(tg_id: int, tg_username: str, roblox_username: str):
-    """Записывает успешный вход в таблицу логов"""
-    now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT INTO logs (tg_id, tg_username, roblox_username, timestamp) VALUES (?, ?, ?, ?)",
-            (tg_id, tg_username, roblox_username, now_str)
-        )
-        await db.commit()
-
-# Получение общего количества логов в базе
-async def get_logs_count():
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT COUNT(*) FROM logs") as cursor:
-            row = await cursor.fetchone()
-            return row[0] if row else 0
-
-# Получение конкретной страницы логов
-async def get_logs_page(page: int, per_page: int):
-    offset = page * per_page
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            "SELECT tg_id, tg_username, roblox_username, timestamp FROM logs ORDER BY id DESC LIMIT ? OFFSET ?",
-            (per_page, offset)
-        ) as cursor:
-            return await cursor.fetchall()
-
-# ==========================================================
-
-# 2. ФУНКЦИИ ROBLOX API
-async def get_roblox_user_id(username: str):
-    url = "https://users.roblox.com/v1/usernames/users"
-    payload = {"usernames": [username], "excludeBannedUsers": True}
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=payload) as response:
-            if response.status == 200:
-                data = await response.json()
-                if data.get("data"):
-                    return data["data"][0]["id"], data["data"][0]["name"]
-            return None, None
-
-async def get_user_creation_date(roblox_id: int):
-    url = f"https://users.roblox.com/v1/users/{roblox_id}"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as response:
-            if response.status == 200:
-                data = await response.json()
-                return data.get("created")
-    return None
-
-async def get_user_groups(roblox_id: int):
-    url = f"https://groups.roblox.com/v2/users/{roblox_id}/groups/roles"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as response:
-            if response.status == 200:
-                data = await response.json()
-                return [g["group"]["id"] for g in data.get("data", [])]
-    return []
-
-async def analyze_account(roblox_id: int):
-    reasons = []
-    
-    created_str = await get_user_creation_date(roblox_id)
-    if created_str:
-        try:
-            created_date = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
-            now = datetime.now(timezone.utc)
-            age_days = (now - created_date).days
-            
-            if age_days < 14:
-                reasons.append(f"Новый аккаунт (возраст: {age_days} дн.)")
-        except Exception:
-            reasons.append("Ошибка определения возраста")
-            
-    user_groups = await get_user_groups(roblox_id)
-    forbidden = set(user_groups).intersection(set(BLACKLIST_GROUPS))
-    if forbidden:
-        reasons.append(f"Состоит в запрещенных группах: {', '.join(map(str, forbidden))}")
-
-    if reasons:
-        return True, " | ".join(reasons)
-    return False, "Чистый аккаунт"
-
-async def roblox_request(method: str, url: str, csrf_token: str = None):
-    headers = {"Cookie": f".ROBLOSECURITY={ROBLOX_COOKIE}", "Content-Type": "application/json"}
-    if csrf_token: headers["X-CSRF-TOKEN"] = csrf_token
+    async def on_ready(self):
+        self.config = self.load_config()
+        if not self.synced:
+            await self.tree.sync()
+            self.synced = True
+        self.add_view(MainPanelView())
         
-    async with aiohttp.ClientSession() as session:
-        async with session.request(method, url, headers=headers) as response:
-            if response.status == 403 and "x-csrf-token" in response.headers:
-                return await roblox_request(method, url, csrf_token=response.headers["x-csrf-token"])
+        print(f"Служба поддержки S7 Airlines запущена под именем {self.user}")
+
+    def load_config(self):
+        """Загрузка конфигурации и состояния из безопасной папки data"""
+        if CONFIG_PATH.exists():
             try:
-                res_json = await response.json()
-            except:
-                res_json = {}
-            return response.status, res_json
+                with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self.ticket_counter = data.get("ticket_counter", 1)
+                    self.eta_time = data.get("eta_time", "15-30 минут")
+                    return {int(k): v for k, v in data.get("guilds", {}).items()}
+            except Exception as e:
+                print(f"⚠️ Ошибка загрузки конфига: {e}")
+        return {}
 
-async def accept_join_request(group_id: int, roblox_user_id: int):
-    url = f"https://groups.roblox.com/v1/groups/{group_id}/join-requests/users/{roblox_user_id}"
-    status, data = await roblox_request("POST", url)
-    if status == 200:
-        return True, "Успешно одобрено"
-    else:
-        return False, data.get("errors", [{}])[0].get("message", "Неизвестная ошибка")
-
-
-# 3. БОТ (ХЭНДЛЕРЫ)
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-dp = Dispatcher()
-from aiogram import html
-
-@dp.callback_query(F.data.startswith('check_'))
-async def process_check_join(callback: CallbackQuery):
-    user_id = int(callback.data.split('_')[1])
-    if callback.from_user.id != user_id:
-        await callback.answer("Это не твоя кнопка!", show_alert=True)
-        return
-
-    user_data = await get_user(user_id)
-    roblox_username, roblox_id, status = user_data
-    
-    if status != 'pending':
-        await callback.answer("Ваша заявка уже была обработана.", show_alert=True)
-        return
-
-    await callback.message.edit_text("⏳ Анализирую аккаунт (дата регистрации, группы)...")
-    
-    needs_review, reason = await analyze_account(roblox_id)
-
-    if needs_review:
-        admin_markup = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Одобрить", callback_data=f"approve_{user_id}"),
-             InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject_{user_id}")]
-        ])
-        tg_user = f"@{callback.from_user.username}" if callback.from_user.username else f"ID: {user_id}"
-        
-        await bot.send_message(
-            chat_id=ADMIN_ID,
-            text=(f"🔔 <b>Ручная проверка!</b>\n"
-                  f"👤 Telegram: {tg_user}\n🎮 Ник: <b>{roblox_username}</b>\n"
-                  f"⚠️ <b>Сработало правило:</b> {reason}\n"
-                  f"🔗 <a href='https://www.roblox.com/users/{roblox_id}/profile'>Профиль игрока</a>"),
-            reply_markup=admin_markup, disable_web_page_preview=True
-        )
-        await callback.message.edit_text(
-            f"⚠️ Твой аккаунт не прошел автоматическую проверку.\n"
-            f"Заявка отправлена администраторам на ручное рассмотрение. Ожидай!"
-        )
-    else:
-        success, message_text = await accept_join_request(GROUP_ID, roblox_id)
-        if success:
-            await update_status(user_id, 'approved')
-            await log_authorization(user_id, callback.from_user.username, roblox_username)
-            
-            await callback.message.edit_text(
-                f"🎉 Авто-проверка пройдена успешно!\n"
-                f"Бот автоматически принял тебя в группу Roblox под ником <b>{roblox_username}</b>!"
-            )
-        else:
-            markup = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔄 Проверить снова", callback_data=f"check_{user_id}")]
-            ])
-            await callback.message.edit_text(
-                f"❌ Ошибка Roblox: {message_text}\n\n"
-                f"Ты точно нажал(а) кнопку 'Join Group'? Попробуй отправить заявку и нажми проверить снова.",
-                reply_markup=markup
-            )
-
-@dp.callback_query(F.data.startswith('approve_'))
-async def handle_approve(callback: CallbackQuery):
-    if callback.from_user.id != ADMIN_ID: return
-    user_id = int(callback.data.split('_')[1])
-    user_data = await get_user(user_id)
-    if not user_data or user_data[2] == 'approved': return
-        
-    success, msg = await accept_join_request(GROUP_ID, user_data[1])
-    if success:
-        await update_status(user_id, 'approved')
-        await log_authorization(user_id, callback.from_user.username, user_data[0])
-        await callback.message.edit_text(f"✅ Заявка {user_data[0]} (TG: {user_id}) одобрена вручную!")
-        try: await bot.send_message(user_id, f"🎉 Твоя заявка была одобрена администратором!") 
-        except: pass
-    else:
-        await callback.answer(f"Ошибка API: {msg}", show_alert=True)
-
-@dp.callback_query(F.data.startswith('reject_'))
-async def handle_reject(callback: CallbackQuery):
-    if callback.from_user.id != ADMIN_ID: return
-    user_id = int(callback.data.split('_')[1])
-    user_data = await get_user(user_id)
-    if not user_data or user_data[2] == 'rejected': return
-        
-    await update_status(user_id, 'rejected')
-    await callback.message.edit_text(f"❌ Заявка {user_data[0]} отклонена.")
-    try: await bot.send_message(user_id, f"❌ Извини, твоя заявка для <b>{user_data[0]}</b> отклонена администратором.")
-    except: pass
-
-
-LOGS_PER_PAGE = 7  # Количество логов на одной странице
-
-async def send_logs_page(event, page: int):
-    is_callback = isinstance(event, CallbackQuery)
-    message = event.message if is_callback else event
-    user_id = event.from_user.id
-
-    # Проверка прав доступа
-    if user_id not in (CREATOR_ID, ADMIN_ID):
-        if is_callback:
-            await event.answer("У вас нет прав.", show_alert=True)
-        return
-
-    total_count = await get_logs_count()
-    if total_count == 0:
-        text = "🗄 Список логов авторизации пока пуст."
-        if is_callback:
-            await event.message.edit_text(text, reply_markup=None)
-            await event.answer()
-        else:
-            await message.answer(text)
-        return
-
-    # Высчитываем общее число страниц
-    total_pages = (total_count - 1) // LOGS_PER_PAGE + 1
-    if page < 0: page = 0
-    if page >= total_pages: page = total_pages - 1
-
-    logs = await get_logs_page(page, LOGS_PER_PAGE)
-
-    text = f"📋 <b>Логи авторизаций в Roblox (Страница {page + 1}/{total_pages}):</b>\n\n"
-    for tg_id, tg_username, roblox_username, timestamp in logs:
-        display_name = f"@{tg_username}" if tg_username else "Пользователь"
-        safe_name = html.quote(display_name)
-        text += f"🕒 [{timestamp}] 👤 <a href='tg://user?id={tg_id}'>{safe_name}</a> (<code>{tg_id}</code>) ➔ 🎮 <b>{roblox_username}</b>\n"
-
-    # Создаем кнопки навигации
-    markup = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="⬅️ Назад", callback_data=f"logspage_{page-1}") if page > 0 else InlineKeyboardButton(text="⏹️", callback_data="ignore_click"),
-        InlineKeyboardButton(text=f"Стр. {page+1}/{total_pages}", callback_data="ignore_click"),
-        InlineKeyboardButton(text="Вперед ➡️", callback_data=f"logspage_{page+1}") if page < total_pages - 1 else InlineKeyboardButton(text="⏹️", callback_data="ignore_click")
-    ]])
-
-    if is_callback:
+    def save_config(self):
+        """Сохранение конфигурации, счетчика и ETA в безопасную папку data"""
         try:
-            await event.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
-        except Exception:
-            pass
-        await event.answer()
-    else:
-        await message.answer(text, reply_markup=markup, disable_web_page_preview=True)
+            payload = {
+                "guilds": self.config,
+                "ticket_counter": self.ticket_counter,
+                "eta_time": self.eta_time
+            }
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            print(f"⚠️ Ошибка сохранения конфига: {e}")
 
-# ==================== КОМАНДЫ БОТА (ВЕРНЫЙ ПОРЯДОК) ====================
+bot = SupportBot()
 
-# 1. Команда /reset
-@dp.message(Command("reset"))
-async def cmd_reset_user(message: Message, command: CommandObject):
-    if message.from_user.id != ADMIN_ID:
-        return 
-        
-    if not command.args:
-        await message.answer(
-            "⚠️ <b>Ошибка:</b> Не указан никнейм.\n"
-            "Использование: <code>/reset НикИгрока</code>\n"
-            "Пример: <code>/reset Builderman</code>"
-        )
-        return
-        
-    username_to_reset = command.args.strip()
-    is_deleted = await delete_user_by_username(username_to_reset)
+def create_embed(title=None, desc="", footer_text=None, author_user=None, author_role=""):
+    """Универсальное создание эмбеда с фирменным цветом бренда S7 и блоком автора"""
+    smaller_title_desc = f"### {title}\n{desc}" if title else desc
     
-    if is_deleted:
-        await message.answer(
-            f"✅ Привязка для аккаунта <b>{username_to_reset}</b> успешно удалена из базы!\n\n"
-            f"Теперь пользователь сможет отправить новую заявку и привязать новый никнейм."
-        )
-    else:
-        await message.answer(f"❌ Аккаунт <b>{username_to_reset}</b> не найден в базе данных.")
-
-# 2. Команда /admin (ПЕРЕНЕСИ СЮДА)
-@dp.message(Command("admin"))
-async def cmd_change_admin(message: Message, command: CommandObject):
-    global ADMIN_ID
-    if message.from_user.id != CREATOR_ID:
-        return
-    if not command.args or not command.args.strip().isdigit():
-        await message.answer("⚠️ Использование: <code>/admin ID_ПОЛЬЗОВАТЕЛЯ</code>")
-        return
-    new_admin_id = int(command.args.strip())
-    ADMIN_ID = new_admin_id
-    await message.answer(f"👑 Новый администратор назначен! ID: <code>{new_admin_id}</code>.")
-
-# 3. Команда /logs (ПЕРЕНЕСИ СЮДА)
-# Команда /logs — всегда открывает самую первую страницу (индекс 0)
-@dp.message(Command("logs"))
-async def cmd_view_logs(message: Message):
-    await send_logs_page(message, page=0)
-
-# Обработка нажатий на стрелочки "Вперед" и "Назад"
-@dp.callback_query(F.data.startswith("logspage_"))
-async def process_logs_page(call: CallbackQuery):
-    page = int(call.data.split("_")[1])
-    await send_logs_page(call, page)
-
-# Заглушка для некликабельных кнопок (чтобы часы загрузки на кнопке исчезали)
-@dp.callback_query(F.data == "ignore_click")
-async def process_ignore_click(call: CallbackQuery):
-    await call.answer()
-
-@dp.message(CommandStart())
-async def cmd_start(message: Message):
-    user_data = await get_user(message.from_user.id)
-    if user_data:
-        await message.answer(f"Ты уже привязал аккаунт <b>{user_data[0]}</b>. Статус: {user_data[2]}")
-    else:
-        await message.answer("Пришли мне свой никнейм в Roblox (только точный ник!):")
-
-@dp.message()
-async def process_nickname(message: Message):
-    user_id = message.from_user.id
-    if await get_user(user_id):
-        await message.answer("Никнейм уже привязан.")
-        return
-        
-    username = message.text.strip()
-    roblox_id, real_username = await get_roblox_user_id(username)
-    if not roblox_id:
-        await message.answer("❌ Игрок не найден. Проверь ник.")
-        return
-        
-    if not await register_user(user_id, real_username, roblox_id):
-        await message.answer("❌ Этот аккаунт уже используется.")
-        return
-        
-    markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Я нажал(а) Join Group", callback_data=f"check_{user_id}")]
-    ])
-    
-    await message.answer(
-        f"✅ Никнейм <b>{real_username}</b> найден!\n\n"
-        f"⚠️ <b>Остался последний шаг:</b>\n"
-        f"1. Открой нашу группу в Roblox\n"
-        f"2. Нажми кнопку <b>'Join Group'</b> (отправь заявку)\n"
-        f"3. ТОЛЬКО ПОСЛЕ ЭТОГО нажми кнопку ниже, чтобы бот проверил твой аккаунт.",
-        reply_markup=markup
+    # ИСПРАВЛЕНИЕ: Используем брендовый EMBED_COLOR везде
+    embed = discord.Embed(
+        description=smaller_title_desc, 
+        color=EMBED_COLOR
     )
+    
+    if author_user:
+        role_label = f" | {author_role}" if author_role else ""
+        embed.set_author(
+            name=f"{author_user.display_name}{role_label}",
+            icon_url=author_user.display_avatar.url,
+            url=f"https://discord.com/users/{author_user.id}"
+        )
+        
+    if footer_text:
+        embed.set_footer(text=footer_text)
+    return embed
+
+# --- СТЕП-БАЙ-СТЕП НАСТРОЙКА /panel ---
+class PanelSetupView(discord.ui.View):
+    def __init__(self, admin):
+        super().__init__(timeout=300)
+        self.admin = admin
+        self.step = 1
+        self.data = {}
+        
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.admin.id:
+            await interaction.response.send_message("Эта панель конфигурации вам недоступна.", ephemeral=True)
+            return False
+        return True
+
+    def update_interface(self, interaction: discord.Interaction):
+        self.clear_items()
+        guild = interaction.guild
+
+        if self.step == 1:
+            select = discord.ui.Select(placeholder="Выберите категорию поддержки...")
+            for cat in guild.categories[:25]:
+                select.add_option(label=cat.name, value=str(cat.id))
+            select.callback = self.save_category
+            self.add_item(select)
+            return "Шаг 1/4: Выберите **Категорию**, в которой будут создаваться каналы тикетов."
+
+        elif self.step == 2:
+            select = discord.ui.Select(placeholder="Выберите категорию для панели...")
+            for cat in guild.categories[:25]:
+                select.add_option(label=cat.name, value=str(cat.id))
+            select.callback = self.save_panel_category
+            self.add_item(select)
+            return "Шаг 2/4 (Часть 1): Выберите **Категорию**, где находится канал для отправки панели."
+
+        elif self.step == 2.5:
+            cat_id = self.data['panel_cat_id']
+            category = guild.get_channel(cat_id)
+            select = discord.ui.Select(placeholder="Выберите текстовый канал...")
+            channels = [ch for ch in category.text_channels][:25]
+            if not channels:
+                self.step = 2
+                return "В выбранной категории нет текстовых каналов! Выберите другую категорию:"
+            for ch in channels:
+                select.add_option(label=ch.name, value=str(ch.id))
+            select.callback = self.save_panel_channel
+            self.add_item(select)
+            return "Шаг 2/4 (Часть 2): Выберите конкретный **Текстовый канал**, куда прислать панель."
+
+        elif self.step == 3:
+            cat_id = self.data['support_cat_id']
+            category = guild.get_channel(cat_id)
+            select = discord.ui.Select(placeholder="Выберите канал логов...")
+            channels = [ch for ch in category.text_channels][:25]
+            if not channels:
+                channels = [ch for ch in guild.text_channels][:25]
+            for ch in channels:
+                select.add_option(label=ch.name, value=str(ch.id))
+            select.callback = self.save_log_channel
+            self.add_item(select)
+            return "Шаг 3/4: Выберите **Канал логов** для аудита действий поддержки."
+
+        elif self.step == 4:
+            select = discord.ui.Select(placeholder="Выберите роль поддержки...")
+            for role in guild.roles[:25]:
+                if not role.is_default():
+                    select.add_option(label=role.name, value=str(role.id))
+            select.callback = self.save_role
+            self.add_item(select)
+            return "Шаг 4/4: Выберите **Роль поддержки**, сотрудники которой будут видеть тикеты."
+
+        elif self.step == 5:
+            ch_id = self.data['panel_channel_id']
+            target_channel = guild.get_channel(ch_id)
+            
+            btn_yes = discord.ui.Button(style=discord.ButtonStyle.success, label="Отправить", emoji="✅")
+            btn_no = discord.ui.Button(style=discord.ButtonStyle.danger, label="Отмена", emoji="❌")
+            
+            btn_yes.callback = self.confirm_setup
+            btn_no.callback = self.cancel_setup
+            
+            self.add_item(btn_yes)
+            self.add_item(btn_no)
+            return f"Конфигурация завершена. Прислать интерактивную панель в канал {target_channel.mention}?"
+
+    async def save_category(self, interaction: discord.Interaction):
+        self.data['support_cat_id'] = int(interaction.data['values'][0])
+        self.step = 2
+        await interaction.response.edit_message(content=self.update_interface(interaction), view=self)
+
+    async def save_panel_category(self, interaction: discord.Interaction):
+        self.data['panel_cat_id'] = int(interaction.data['values'][0])
+        self.step = 2.5
+        await interaction.response.edit_message(content=self.update_interface(interaction), view=self)
+
+    async def save_panel_channel(self, interaction: discord.Interaction):
+        self.data['panel_channel_id'] = int(interaction.data['values'][0])
+        self.step = 3
+        await interaction.response.edit_message(content=self.update_interface(interaction), view=self)
+
+    async def save_log_channel(self, interaction: discord.Interaction):
+        self.data['log_channel_id'] = int(interaction.data['values'][0])
+        self.step = 4
+        await interaction.response.edit_message(content=self.update_interface(interaction), view=self)
+
+    async def save_role(self, interaction: discord.Interaction):
+        self.data['support_role_id'] = int(interaction.data['values'][0])
+        self.step = 5
+        await interaction.response.edit_message(content=self.update_interface(interaction), view=self)
+
+    async def confirm_setup(self, interaction: discord.Interaction):
+        bot.config[interaction.guild.id] = self.data
+        bot.save_config()
+        target_channel = interaction.guild.get_channel(self.data['panel_channel_id'])
+        
+        main_panel_embed = discord.Embed(
+            title="Support / Клиентская поддержка",
+            description="If you wish to open a support request, please press the button below.\n\nЕсли вы желаете открыть обращение в службу поддержки, пожалуйста, нажмите кнопку ниже.",
+            color=EMBED_COLOR
+        )
+        main_panel_view = MainPanelView()
+        await target_channel.send(embed=main_panel_embed, view=main_panel_view)
+        await interaction.response.edit_message(content="Панель успешно установлена и запущена.", view=None)
+
+    async def cancel_setup(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(content="Настройка отменена администратором.", view=None)
 
 
-# ==================== ЗАПУСК БОТА ====================
-async def main():
-    await init_db()
-    print("Бот с фильтром запущен!")
-    await dp.start_polling(bot)
+class TopicSelectView(discord.ui.View):
+    def __init__(self, lang, callback_func):
+        super().__init__(timeout=180)
+        self.lang = lang
+        self.callback_func = callback_func
+        
+        t = TRANSLATIONS[lang]
+        options = []
+        
+        for key, data in t['topics'].items():
+            emoji_val = data['emoji']
+            if ":" in str(emoji_val):
+                emoji_val = discord.PartialEmoji.from_str(emoji_val)
+                
+            options.append(
+                discord.SelectOption(
+                    label=data['label'],
+                    value=key,
+                    description=data['desc'],
+                    emoji=emoji_val
+                )
+            )
+            
+        select = discord.ui.Select(
+            placeholder=t['topic_placeholder'],
+            options=options
+        )
+        select.callback = self.select_callback
+        self.add_item(select)
 
-if __name__ == "__main__":
-    asyncio.run(main())
+    async def select_callback(self, interaction: discord.Interaction):
+        chosen_topic_key = interaction.data['values'][0]
+        await self.callback_func(interaction, chosen_topic_key)
+
+
+# --- ГЛАВНАЯ ПАНЕЛЬ И ВЫБОР ЯЗЫКА И ТЕМЫ ---
+class MainPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Open Request / Открыть обращение", style=discord.ButtonStyle.primary, custom_id="open_request_btn")
+    async def open_request(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.guild.id not in bot.config:
+            await interaction.response.send_message("Ошибка: Бот еще не настроен администратором сервера.", ephemeral=True)
+            return
+            
+        if interaction.user.id in bot.active_tickets:
+            await interaction.response.send_message("У вас уже есть активная сессия поддержки.", ephemeral=True)
+            return
+
+        view = LanguageSelectionView()
+        embed = discord.Embed(
+            title="Выберите язык | Choose language",
+            description="Чтобы наша служба поддержки смогла работать качественнее, пожалуйста, укажите предпочитаемый язык общения.\n\nTo help our customer service provide elite assistance, please select your preferred language.",
+            color=EMBED_COLOR
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+class LanguageSelectionView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+
+    @discord.ui.button(label="Русский", style=discord.ButtonStyle.secondary, emoji="🇷🇺")
+    async def select_ru(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_language(interaction, 'ru')
+
+    @discord.ui.button(label="English", style=discord.ButtonStyle.secondary, emoji="🇬🇧")
+    async def select_en(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_language(interaction, 'en')
+
+    async def process_language(self, interaction: discord.Interaction, lang: str):
+        user = interaction.user
+
+        async def on_topic_selected(topic_interaction: discord.Interaction, chosen_topic: str):
+            bot.active_tickets[user.id] = {
+                'guild_id': interaction.guild.id,
+                'lang': lang,
+                'topic': chosen_topic,
+                'status': 'awaiting_description',
+                'channel_id': None,
+                'agent_id': None,
+                'timer_task': None
+            }
+
+            await topic_interaction.response.edit_message(
+                content=f"⏳ **{TRANSLATIONS[lang]['check_dm_title']}**...\nИнициализируем защищенный канал связи.", 
+                embed=None, 
+                view=None
+            )
+
+            try:
+                topic_label = TRANSLATIONS[lang]['topics'][chosen_topic]['label']
+                dm_desc = f"**Тема:** {topic_label}\n\n" + TRANSLATIONS[lang]['dm_welcome_desc']
+                
+                embed = create_embed(
+                    title=TRANSLATIONS[lang]['dm_welcome_title'],
+                    desc=dm_desc,
+                    footer_text=TRANSLATIONS[lang]['footer_bot']
+                )
+                dm_channel = await user.create_dm()
+                await dm_channel.send(embed=embed)
+            except discord.Forbidden:
+                del bot.active_tickets[user.id]
+                await topic_interaction.followup.send("Не удалось отправить сообщение в ЛС. Откройте личные сообщения в настройках конфиденциальности.", ephemeral=True)
+                return
+
+            view_dm = discord.ui.View()
+            btn_url = discord.ui.Button(label=TRANSLATIONS[lang]['check_dm_btn'], url=f"https://discord.com/channels/@me/{dm_channel.id}")
+            view_dm.add_item(btn_url)
+            
+            await topic_interaction.edit_original_response(
+                content=f"**{TRANSLATIONS[lang]['check_dm_title']}**\n{TRANSLATIONS[lang]['check_dm_desc']}", 
+                view=view_dm
+            )
+            
+            await asyncio.sleep(20)
+            try:
+                await topic_interaction.delete_original_response()
+            except Exception:
+                pass
+
+        topic_view = TopicSelectView(lang, on_topic_selected)
+        await interaction.response.edit_message(
+            content=None,
+            embed=create_embed(title=TRANSLATIONS[lang]['topic_title'], desc=""),
+            view=topic_view
+        )
+
+
+# --- КНОПКИ ДЛЯ АГЕНТОВ В ТИКЕТ-КАНАЛЕ ---
+class AgentTicketActions(discord.ui.View):
+    def __init__(self, user_id):
+        super().__init__(timeout=None)
+        self.user_id = user_id
+
+    @discord.ui.button(label="Принять / Accept", style=discord.ButtonStyle.success, custom_id="accept_ticket")
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        ticket = bot.active_tickets.get(self.user_id)
+        if not ticket or ticket['status'] != 'pending_agent':
+            await interaction.response.send_message("Тикет уже обработан.", ephemeral=True)
+            return
+
+        ticket['status'] = 'chatting'
+        ticket['agent_id'] = interaction.user.id
+        lang = ticket['lang']
+
+        if ticket['timer_task']:
+            ticket['timer_task'].cancel()
+        ticket['timer_task'] = asyncio.create_task(start_inactivity_timer(self.user_id, interaction.channel))
+
+        self.clear_items()
+        await interaction.response.edit_message(content=f"**Тикет принят агентом {interaction.user.mention}**", view=None)
+
+        user = bot.get_user(self.user_id)
+        if user:
+            full_desc = TRANSLATIONS[lang]['accepted_desc'] + TRANSLATIONS[lang]['accepted_instruction']
+            
+            # ИСПРАВЛЕНИЕ: Теперь агент передается как автор с аватаркой, ником и ссылкой
+            embed = create_embed(
+                title=None, 
+                desc=full_desc, 
+                footer_text=TRANSLATIONS[lang]['footer_agent'],
+                author_user=interaction.user,
+                author_role=TRANSLATIONS[lang]['accepted_title']
+            )
+            await user.send(embed=embed)
+
+    @discord.ui.button(label="Отклонить / Reject", style=discord.ButtonStyle.danger, custom_id="reject_ticket")
+    async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
+        ticket = bot.active_tickets.get(self.user_id)
+        if not ticket or ticket['status'] != 'pending_agent':
+            await interaction.response.send_message("Тикет уже обработан.", ephemeral=True)
+            return
+
+        lang = ticket['lang']
+        user = bot.get_user(self.user_id)
+        
+        if user:
+            embed = create_embed(
+                title=TRANSLATIONS[lang]['rejected_title'], 
+                desc=TRANSLATIONS[lang]['rejected_desc'], 
+                footer_text=TRANSLATIONS[lang]['footer_bot']
+            )
+            await user.send(embed=embed)
+
+        if ticket['timer_task']:
+            ticket['timer_task'].cancel()
+        del bot.active_tickets[self.user_id]
+        
+        await interaction.response.edit_message(content=f"**Тикет отклонен агентом {interaction.user.mention}**", view=None)
+        await asyncio.sleep(5)
+        await interaction.channel.delete()
+
+
+# --- ТАЙМЕРЫ И АВТОЗАКРЫТИЕ ---
+async def start_inactivity_timer(user_id, channel):
+    try:
+        await asyncio.sleep(8 * 3600)
+        
+        ticket = bot.active_tickets.get(user_id)
+        if ticket and ticket['status'] == 'chatting':
+            lang = ticket['lang']
+            user = bot.get_user(user_id)
+            if user:
+                embed = create_embed(
+                    title=TRANSLATIONS[lang]['still_here_title'],
+                    desc=TRANSLATIONS[lang]['still_here_desc'] + TRANSLATIONS[lang]['still_here_warning'],
+                    footer_text=TRANSLATIONS[lang]['footer_bot']
+                )
+                await user.send(embed=embed)
+                
+                log_embed = create_embed(
+                    title="⚠️ Ожидание ответа", 
+                    desc="> Клиенту отправлено автоматическое уведомление о неактивности. Ожидание завершения: 6 часов.", 
+                    footer_text="Система контроля таймингов"
+                )
+                await channel.send(embed=log_embed)
+            
+            await asyncio.sleep(6 * 3600)
+            await close_ticket_action(user_id, channel, method="timeout")
+            
+    except asyncio.CancelledError:
+        pass
+
+async def close_ticket_action(user_id, channel, method="manual"):
+    ticket = bot.active_tickets.get(user_id)
+    if not ticket:
+        return
+
+    lang = ticket['lang']
+    user = bot.get_user(user_id)
+
+    if user:
+        desc = TRANSLATIONS[lang]['closed_desc'] + TRANSLATIONS[lang]['closed_footer']
+        embed = create_embed(
+            title=TRANSLATIONS[lang]['closed_title'], 
+            desc=desc, 
+            footer_text=TRANSLATIONS[lang]['closed_action_footer']
+        )
+        await user.send(embed=embed)
+
+    if ticket['timer_task']:
+        ticket['timer_task'].cancel()
+        
+    del bot.active_tickets[user_id]
+
+    reason_key = 'staff_reason_manual' if method == "manual" else 'staff_reason_timeout'
+    staff_reason = TRANSLATIONS[lang][reason_key]
+
+    desc_text = TRANSLATIONS[lang]['staff_closed_desc'].format(reason=staff_reason)
+
+    staff_embed = create_embed(
+        title=TRANSLATIONS[lang]['staff_closed_title'],
+        desc=desc_text,
+        footer_text=TRANSLATIONS[lang]['staff_closed_footer']
+    )
+    await channel.send(embed=staff_embed)
+
+
+# --- СЛЭШ-КОМАНДЫ ДЛЯ АДМИНИСТРАЦИИ ---
+@bot.tree.command(name="panel", description="Запустить интерактивный процесс настройки панели поддержки")
+@app_commands.checks.has_permissions(administrator=True)
+async def panel_command(interaction: discord.Interaction):
+    view = PanelSetupView(interaction.user)
+    initial_text = view.update_interface(interaction)
+    await interaction.response.send_message(content=initial_text, view=view, ephemeral=True)
+
+@bot.tree.command(name="seteta", description="Изменить ожидаемое время ответа поддержки для клиентов")
+@app_commands.checks.has_permissions(manage_messages=True)
+async def set_eta(interaction: discord.Interaction, time_val: str):
+    bot.eta_time = time_val
+    bot.save_config()
+    await interaction.response.send_message(f"Ориентировочное время ответа успешно изменено на: **{time_val}**", ephemeral=True)
+
+@bot.tree.command(name="close", description="Закрыть текущую сессию поддержки и зафиксировать тикет")
+async def close_command(interaction: discord.Interaction):
+    found_user_id = None
+    for uid, data in bot.active_tickets.items():
+        if data['channel_id'] == interaction.channel.id:
+            found_user_id = uid
+            break
+
+    if found_user_id:
+        await interaction.response.send_message("Запуск процедуры закрытия тикета...", ephemeral=True)
+        await close_ticket_action(found_user_id, interaction.channel, method="manual")
+    else:
+        await interaction.response.send_message("Данный канал не является активным тикетом.", ephemeral=True)
+
+
+# --- ОБРАБОТКА ВСЕХ СООБЩЕНИЙ (ПЕРЕСЫЛКА ЛС <-> КАНАЛ) ---
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
+
+    # Клиент пишет боту в ЛС
+    if isinstance(message.channel, discord.DMChannel):
+        ticket = bot.active_tickets.get(message.author.id)
+        if not ticket:
+            return
+
+        lang = ticket['lang']
+        guild = bot.get_guild(ticket['guild_id'])
+        cfg = bot.config.get(guild.id)
+
+        # Первое сообщение клиентом (создание текстового канала тикета)
+        if ticket['status'] == 'awaiting_description':
+            ticket['status'] = 'pending_agent'
+            
+            formatted_num = f"{bot.ticket_counter:04d}"
+            bot.ticket_counter += 1
+            bot.save_config()
+            
+            support_category = guild.get_channel(cfg['support_cat_id'])
+            
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                guild.get_role(cfg['support_role_id']): discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            }
+            
+            ticket_channel = await guild.create_text_channel(
+                name=f"ticket-{formatted_num}",
+                category=support_category,
+                overwrites=overwrites
+            )
+            ticket['channel_id'] = ticket_channel.id
+
+            topic_key = ticket.get('topic', 'general')
+            topic_label = TRANSLATIONS[lang]['topics'].get(topic_key, {}).get('label', 'Общий вопрос')
+
+            # ИСПРАВЛЕНИЕ: Первый эмбед в канале тикета теперь содержит профиль клиента с его аватаркой
+            agent_embed = create_embed(
+                title=None,
+                desc=f"**Тема:** {topic_label}\n\n> {message.content}",
+                author_user=message.author,
+                author_role=TRANSLATIONS[lang]['client_title']
+            )
+            actions_view = AgentTicketActions(message.author.id)
+            await ticket_channel.send(embed=agent_embed, view=actions_view)
+
+            eta_desc = TRANSLATIONS[lang]['ticket_opened_desc'] + TRANSLATIONS[lang]['eta_text'].format(eta=bot.eta_time)
+            user_embed = create_embed(
+                title=TRANSLATIONS[lang]['ticket_opened_title'], 
+                desc=eta_desc, 
+                footer_text=TRANSLATIONS[lang]['footer_bot']
+            )
+            await message.author.send(embed=user_embed)
+            return
+            
+        # Последующие сообщения клиента
+        elif ticket['status'] == 'chatting':
+            ticket_channel = guild.get_channel(ticket['channel_id'])
+            if ticket_channel:
+                client_label = TRANSLATIONS[lang]['client_title']
+                
+                client_embed = create_embed(
+                    title=None, 
+                    desc=f"> {message.content}", 
+                    footer_text="Разговор идет с Customer",
+                    author_user=message.author,
+                    author_role=client_label
+                )
+                
+                await ticket_channel.send(embed=client_embed)
+                await message.add_reaction("✅")
+                
+                if ticket['timer_task']:
+                    ticket['timer_task'].cancel()
+                ticket['timer_task'] = asyncio.create_task(start_inactivity_timer(message.author.id, ticket_channel))
+                
+    # Агент пишет в канал тикета на сервере
+    else:
+        found_user_id = None
+        for uid, data in bot.active_tickets.items():
+            if data['channel_id'] == message.channel.id:
+                found_user_id = uid
+                break
+
+        if found_user_id:
+            if message.content.startswith(("/", "!")):
+                return
+
+            ticket = bot.active_tickets[found_user_id]
+            
+            if ticket['status'] != 'chatting':
+                return
+
+            lang = ticket['lang']
+            user = bot.get_user(found_user_id)
+            
+            if user:
+                embed = create_embed(
+                    title=None, 
+                    desc=f"> {message.content}", 
+                    footer_text=TRANSLATIONS[lang]['footer_agent'],
+                    author_user=message.author,
+                    author_role=TRANSLATIONS[lang]['accepted_title']
+                )
+                await user.send(embed=embed)
+                
+                try:
+                    await message.add_reaction("галочка:1234567890")
+                except Exception:
+                    await message.add_reaction("✅")
+
+# --- ЗАПУСК БОТА ---
+TOKEN = os.getenv("DISCORD_TOKEN")
+
+if TOKEN:
+    bot.run(TOKEN)
+else:
+    print("❌ КРИТИЧЕСКАЯ ОШИБКА: Переменная окружения 'DISCORD_TOKEN' не найдена!")
