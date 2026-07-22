@@ -14,8 +14,8 @@ if not DATA_DIR.exists():
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / "config.json"
 
-# --- ЦВЕТОВАЯ ПАЛИТРА БРЕНДА S7 AIRLINES ---
-EMBED_COLOR = discord.Color(0xbddc03) # Фирменный салатовый цвет #bddc03
+# --- ЦВЕТОВАЯ ПАЛИТРА БРЕНДА ---
+EMBED_COLOR = discord.Color(0xbddc03) # Твой кастомный цвет #bddc03
 
 # --- ЛОКАЛИЗАЦИЯ И ТЕКСТЫ (Официальный стиль S7 Airlines) ---
 TRANSLATIONS = {
@@ -176,7 +176,7 @@ def create_embed(title=None, desc="", footer_text=None, author_user=None, author
     """Универсальное создание эмбеда с фирменным цветом бренда S7 и блоком автора"""
     smaller_title_desc = f"### {title}\n{desc}" if title else desc
     
-    # ИСПРАВЛЕНИЕ: Используем брендовый EMBED_COLOR везде
+    # ИСПРАВЛЕНИЕ 1: Цвет теперь везде брендовый EMBED_COLOR
     embed = discord.Embed(
         description=smaller_title_desc, 
         color=EMBED_COLOR
@@ -479,7 +479,7 @@ class AgentTicketActions(discord.ui.View):
         if user:
             full_desc = TRANSLATIONS[lang]['accepted_desc'] + TRANSLATIONS[lang]['accepted_instruction']
             
-            # ИСПРАВЛЕНИЕ: Теперь агент передается как автор с аватаркой, ником и ссылкой
+            # ИСПРАВЛЕНИЕ 2: Агент передаётся как профиль с аватаркой в заголовок
             embed = create_embed(
                 title=None, 
                 desc=full_desc, 
@@ -652,7 +652,7 @@ async def on_message(message: discord.Message):
             topic_key = ticket.get('topic', 'general')
             topic_label = TRANSLATIONS[lang]['topics'].get(topic_key, {}).get('label', 'Общий вопрос')
 
-            # ИСПРАВЛЕНИЕ: Первый эмбед в канале тикета теперь содержит профиль клиента с его аватаркой
+            # ИСПРАВЛЕНИЕ 3: Вместо "Запрос от: ..." в канале агента теперь полноценный профиль клиента с его аватаркой
             agent_embed = create_embed(
                 title=None,
                 desc=f"**Тема:** {topic_label}\n\n> {message.content}",
