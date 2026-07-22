@@ -15,7 +15,7 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / "config.json"
 
 # --- ЦВЕТОВАЯ ПАЛИТРА БРЕНДА ---
-EMBED_COLOR = discord.Color(0xbddc03) # Твой кастомный цвет #bddc03
+EMBED_COLOR = discord.Color(0xbddc03) # Фирменный цвет #bddc03
 
 # --- ЛОКАЛИЗАЦИЯ И ТЕКСТЫ (Официальный стиль S7 Airlines) ---
 TRANSLATIONS = {
@@ -172,11 +172,10 @@ class SupportBot(commands.Bot):
 
 bot = SupportBot()
 
-def create_embed(title=None, desc="", footer_text=None, author_user=None, author_role=""):
-    """Универсальное создание эмбеда с фирменным цветом бренда S7 и блоком автора"""
+def create_embed(title, desc, footer_text=None, author_user=None, author_role=""):
+    """Универсальное создание эмбеда в брендовом цвете"""
     smaller_title_desc = f"### {title}\n{desc}" if title else desc
     
-    # ИСПРАВЛЕНИЕ 1: Цвет теперь везде брендовый EMBED_COLOR
     embed = discord.Embed(
         description=smaller_title_desc, 
         color=EMBED_COLOR
@@ -446,7 +445,7 @@ class LanguageSelectionView(discord.ui.View):
         topic_view = TopicSelectView(lang, on_topic_selected)
         await interaction.response.edit_message(
             content=None,
-            embed=create_embed(title=TRANSLATIONS[lang]['topic_title'], desc=""),
+            embed=create_embed(TRANSLATIONS[lang]['topic_title'], ""),
             view=topic_view
         )
 
@@ -477,16 +476,9 @@ class AgentTicketActions(discord.ui.View):
 
         user = bot.get_user(self.user_id)
         if user:
+            agent_title = f"{interaction.user.display_name}, {TRANSLATIONS[lang]['accepted_title']}"
             full_desc = TRANSLATIONS[lang]['accepted_desc'] + TRANSLATIONS[lang]['accepted_instruction']
-            
-            # ИСПРАВЛЕНИЕ 2: Агент передаётся как профиль с аватаркой в заголовок
-            embed = create_embed(
-                title=None, 
-                desc=full_desc, 
-                footer_text=TRANSLATIONS[lang]['footer_agent'],
-                author_user=interaction.user,
-                author_role=TRANSLATIONS[lang]['accepted_title']
-            )
+            embed = create_embed(agent_title, full_desc, TRANSLATIONS[lang]['footer_agent'])
             await user.send(embed=embed)
 
     @discord.ui.button(label="Отклонить / Reject", style=discord.ButtonStyle.danger, custom_id="reject_ticket")
@@ -501,9 +493,9 @@ class AgentTicketActions(discord.ui.View):
         
         if user:
             embed = create_embed(
-                title=TRANSLATIONS[lang]['rejected_title'], 
-                desc=TRANSLATIONS[lang]['rejected_desc'], 
-                footer_text=TRANSLATIONS[lang]['footer_bot']
+                TRANSLATIONS[lang]['rejected_title'], 
+                TRANSLATIONS[lang]['rejected_desc'], 
+                TRANSLATIONS[lang]['footer_bot']
             )
             await user.send(embed=embed)
 
@@ -527,17 +519,13 @@ async def start_inactivity_timer(user_id, channel):
             user = bot.get_user(user_id)
             if user:
                 embed = create_embed(
-                    title=TRANSLATIONS[lang]['still_here_title'],
-                    desc=TRANSLATIONS[lang]['still_here_desc'] + TRANSLATIONS[lang]['still_here_warning'],
-                    footer_text=TRANSLATIONS[lang]['footer_bot']
+                    TRANSLATIONS[lang]['still_here_title'],
+                    TRANSLATIONS[lang]['still_here_desc'] + TRANSLATIONS[lang]['still_here_warning'],
+                    TRANSLATIONS[lang]['footer_bot']
                 )
                 await user.send(embed=embed)
                 
-                log_embed = create_embed(
-                    title="⚠️ Ожидание ответа", 
-                    desc="> Клиенту отправлено автоматическое уведомление о неактивности. Ожидание завершения: 6 часов.", 
-                    footer_text="Система контроля таймингов"
-                )
+                log_embed = create_embed("⚠️ Ожидание ответа", "> Клиенту отправлено автоматическое уведомление о неактивности. Ожидание завершения: 6 часов.", "Система контроля таймингов")
                 await channel.send(embed=log_embed)
             
             await asyncio.sleep(6 * 3600)
@@ -556,11 +544,7 @@ async def close_ticket_action(user_id, channel, method="manual"):
 
     if user:
         desc = TRANSLATIONS[lang]['closed_desc'] + TRANSLATIONS[lang]['closed_footer']
-        embed = create_embed(
-            title=TRANSLATIONS[lang]['closed_title'], 
-            desc=desc, 
-            footer_text=TRANSLATIONS[lang]['closed_action_footer']
-        )
+        embed = create_embed(TRANSLATIONS[lang]['closed_title'], desc, TRANSLATIONS[lang]['closed_action_footer'])
         await user.send(embed=embed)
 
     if ticket['timer_task']:
@@ -652,22 +636,16 @@ async def on_message(message: discord.Message):
             topic_key = ticket.get('topic', 'general')
             topic_label = TRANSLATIONS[lang]['topics'].get(topic_key, {}).get('label', 'Общий вопрос')
 
-            # ИСПРАВЛЕНИЕ 3: Вместо "Запрос от: ..." в канале агента теперь полноценный профиль клиента с его аватаркой
-            agent_embed = create_embed(
-                title=None,
-                desc=f"**Тема:** {topic_label}\n\n> {message.content}",
-                author_user=message.author,
-                author_role=TRANSLATIONS[lang]['client_title']
+            agent_embed = discord.Embed(
+                title=f"Запрос от: {message.author.display_name}",
+                description=f"**Тема:** {topic_label}\n\n> {message.content}",
+                color=EMBED_COLOR
             )
             actions_view = AgentTicketActions(message.author.id)
             await ticket_channel.send(embed=agent_embed, view=actions_view)
 
             eta_desc = TRANSLATIONS[lang]['ticket_opened_desc'] + TRANSLATIONS[lang]['eta_text'].format(eta=bot.eta_time)
-            user_embed = create_embed(
-                title=TRANSLATIONS[lang]['ticket_opened_title'], 
-                desc=eta_desc, 
-                footer_text=TRANSLATIONS[lang]['footer_bot']
-            )
+            user_embed = create_embed(TRANSLATIONS[lang]['ticket_opened_title'], eta_desc, TRANSLATIONS[lang]['footer_bot'])
             await message.author.send(embed=user_embed)
             return
             
@@ -686,7 +664,10 @@ async def on_message(message: discord.Message):
                 )
                 
                 await ticket_channel.send(embed=client_embed)
-                await message.add_reaction("✅")
+                try:
+                    await message.add_reaction("✅")
+                except Exception:
+                    pass
                 
                 if ticket['timer_task']:
                     ticket['timer_task'].cancel()
@@ -723,9 +704,9 @@ async def on_message(message: discord.Message):
                 await user.send(embed=embed)
                 
                 try:
-                    await message.add_reaction("галочка:1234567890")
-                except Exception:
                     await message.add_reaction("✅")
+                except Exception:
+                    pass
 
 # --- ЗАПУСК БОТА ---
 TOKEN = os.getenv("DISCORD_TOKEN")
